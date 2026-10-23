@@ -4,6 +4,10 @@ name: Release
 on:
   push:
     branches: [main]
+    # Mudança só em documentação (README e LICENSE) não gera release.
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
 
 permissions:
   contents: write
