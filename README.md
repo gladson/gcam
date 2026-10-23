@@ -65,6 +65,28 @@ npm run clean              # apaga node_modules, dist, src-tauri/gen e src-tauri
 - **Sem assinatura:** os instaladores não são assinados. O macOS (Gatekeeper) e o Windows (SmartScreen) mostram aviso de app não verificado na primeira abertura.
 - **Sem atualização automática:** o app não se atualiza sozinho. Quem usa precisa baixar a release nova.
 
+### Abrindo no macOS
+
+Como o app não é assinado, o macOS bloqueia a primeira abertura. Depois de baixar o `.dmg`, arraste o `gcam.app` para a pasta **Applications**.
+
+**Pelas configurações (recomendado):**
+
+1. Dê duplo clique no `gcam`. Quando o aviso aparecer, feche-o.
+2. Abra **Ajustes do Sistema → Privacidade e Segurança**.
+3. Role até a seção **Segurança**. Ao lado da mensagem "gcam foi bloqueado…", clique em **Abrir Mesmo Assim** e confirme com a senha do Mac.
+
+No macOS Sequoia (15) e mais novos, o clique com o botão direito em **Abrir** não funciona mais para apps sem assinatura. Use o caminho acima.
+
+**Pelo Terminal (se o macOS disser que o app "está danificado"):**
+
+```bash
+xattr -dr com.apple.quarantine /Applications/gcam.app
+```
+
+Esse comando remove o atributo de quarentena que o navegador coloca nos arquivos baixados. Use só em apps em que você confia.
+
+**Permissão de rede local:** na primeira varredura de dispositivos, o macOS pede acesso à rede local. Permita, senão o scanner e a detecção de câmeras não funcionam.
+
 ## Como funciona
 
 - **Detecção de marca** (`src-tauri/src/detect.rs`): verifica quais portas respondem (80, 554, 6668…)
