@@ -85,3 +85,7 @@ npm run clean              # apaga node_modules, dist, src-tauri/gen e src-tauri
 - Para corrigir uma câmera, use **Editar** no cartão. Nome e caminho RTSP aparecem só na edição.
 - A detecção de marca é uma heurística. Se errar, troque a marca no formulário antes de salvar.
 - Porta `8554` (RTSP) e `1984` (API/player do go2rtc) ficam só em `127.0.0.1`.
+
+## Licença
+
+Distribuído sob a licença [MIT](LICENSE).
