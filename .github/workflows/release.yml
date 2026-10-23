@@ -1,0 +1,136 @@
+name: Release
+
+# Roda quando algo entra na main (só por PR aprovada, se a branch estiver protegida).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Uma release por vez: a limpeza de versões antigas não pode correr junto com outra.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      # Major.minor vêm do tauri.conf.json; o patch é o número da execução do workflow.
+      - id: version
+        run: |
+          BASE=$(node -p "require('./src-tauri/tauri.conf.json').version.split('.').slice(0, 2).join('.')")
+          VERSION="$BASE.${{ github.run_number }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+  # Cria a release como rascunho antes dos builds, para que todos os sistemas enviem para ela.
+  create-release:
+    needs: version
+    runs-on: ubuntu-22.04
+    outputs:
+      release_id: ${{ steps.release.outputs.id }}
+    steps:
+      - id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "gcam $VERSION" --generate-notes
+          ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [version, create-release]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: --bundles deb,appimage
+          - platform: windows-latest
+            args: --bundles nsis,msi
+          # Runner macOS é o arm64 (Apple Silicon). Macs Intel não estão incluídos.
+          - platform: macos-latest
+            args: --bundles app,dmg
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Dependências do Tauri (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - run: npm ci
+
+      - name: Gravar a versão do app
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/set-version.mjs
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: ${{ matrix.args }}
+
+  publish:
+    needs: [version, create-release, build]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Publicar a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false
+
+  # Mantém só as 6 releases mais recentes e apaga rascunhos de execuções que falharam.
+  cleanup:
+    needs: [version, publish]
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      # As 6 mais recentes ficam (a atual está entre elas); o resto é apagado com a tag.
+      - name: Apagar releases antigas
+        run: |
+          gh release list --limit 1000 --json tagName,isDraft,createdAt \
+            --jq '[.[] | select(.isDraft | not)] | sort_by(.createdAt) | reverse | .[6:][].tagName' \
+            | while read -r tag; do
+                echo "Apagando $tag"
+                gh release delete "$tag" --cleanup-tag --yes
+              done
+
+      - name: Apagar rascunhos de execuções anteriores
+        run: |
+          gh release list --limit 1000 --json tagName,isDraft \
+            --jq '.[] | select(.isDraft) | .tagName' \
+            | grep -vx "$TAG" \
+            | while read -r tag; do
+                echo "Apagando rascunho $tag"
+                gh release delete "$tag" --cleanup-tag --yes
+              done

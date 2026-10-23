@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gcam</title>
+  <!-- Player do gcam, servido pelo go2rtc (mesma origem do WebSocket /api/ws). -->
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+    video-stream { display: block; width: 100%; height: 100%; }
+    video { object-fit: contain; background: #000; }
+  </style>
+</head>
+<body>
+<script type="module">
+  import './video-stream.js';
+
+  const params = new URLSearchParams(location.search);
+  const src = params.get('src') || '';
+  // No WebView do macOS o H.265 só aparece pelo WebRTC.
+  const mode = params.get('mode') || 'webrtc';
+
+  // Sem quadro novo por STALL_MS depois de já ter mostrado imagem = vídeo congelado.
+  const STALL_MS = 8000;
+  // Tempo para o primeiro quadro de uma conexão nova; cresce a cada falha seguida, até MAX_WAIT_MS.
+  const FIRST_FRAME_MS = 25000;
+  const MAX_WAIT_MS = 120000;
+  // Pausa sem player antes de reconectar, para o go2rtc encerrar a sessão travada com a câmera.
+  // Maior a partir da 2ª falha seguida, para dar tempo de a sessão nova com a Tuya ser criada do zero.
+  const RECONNECT_GAP_MS = 1500;
+  const RESET_GAP_MS = 3000;
+  // Tocando direito por esse tempo, as falhas anteriores deixam de contar.
+  const HEALTHY_MS = 60000;
+
+  let el = null;
+  let failures = 0;
+  let busy = false;
+  let startedAt = 0;
+  // Momento do último quadro novo; 0 enquanto a conexão atual ainda não mostrou imagem.
+  let lastFrameAt = 0;
+  let playingSince = 0;
+  let lastTime = -1;
+  let lastFrames = -1;
+  let usesFrameCallback = false;
+  let sent = '';
+
+  // Só o estado vai para o app; nada de URL de origem ou senha.
+  function report(status) {
+    const key = status + ':' + failures;
+    if (key === sent) return;
+    sent = key;
+    parent.postMessage({ type: 'cm-player', src, status, failures }, '*');
+  }
+
+  function markFrame() {
+    const now = Date.now();
+    if (!lastFrameAt || now - lastFrameAt > STALL_MS) playingSince = now;
+    lastFrameAt = now;
+  }
+
+  function create() {
+    const node = document.createElement('video-stream');
+    node.mode = mode;
+    node.background = true;
+    const url = new URL('api/ws?src=' + encodeURIComponent(src), location.href);
+    node.src = url;
+    // Ao entrar na página o elemento cria o <video> e conecta.
+    document.body.appendChild(node);
+    const video = node.video;
+    if (video) {
+      video.muted = true;
+      video.autoplay = true;
+      video.playsInline = true;
+      // Um callback por quadro exibido: o sinal mais confiável de que a imagem anda.
+      usesFrameCallback = typeof video.requestVideoFrameCallback === 'function';
+      if (usesFrameCallback) {
+        const onFrame = () => {
+          if (el !== node) return;
+          markFrame();
+          video.requestVideoFrameCallback(onFrame);
+        };
+        video.requestVideoFrameCallback(onFrame);
+      }
+    }
+    el = node;
+    startedAt = Date.now();
+    lastFrameAt = 0;
+    lastTime = -1;
+    lastFrames = -1;
+  }
+
+  function destroy() {
+    if (!el) return;
+    // Com background ligado o elemento não se desconecta sozinho ao sair da página.
+    el.ondisconnect();
+    el.remove();
+    el = null;
+  }
+
+  async function reconnect() {
+    if (busy) return;
+    busy = true;
+    failures += 1;
+    report('stalled');
+    destroy();
+    report('reconnecting');
+    await new Promise(r => setTimeout(r, failures >= 2 ? RESET_GAP_MS : RECONNECT_GAP_MS));
+    create();
+    busy = false;
+  }
+
+  // O app pode pedir uma reconexão (ex.: depois de recriar o stream).
+  window.addEventListener('message', ev => {
+    if (ev.source === parent && ev.data && ev.data.type === 'cm-player-reload') reconnect();
+  });
+
+  // Fora da área visível (cartão rolado para fora da tela) o WebView também pode parar de desenhar quadros.
+  let onScreen = true;
+  new IntersectionObserver(entries => {
+    onScreen = entries[entries.length - 1].isIntersecting;
+  }).observe(document.body);
+
+  let hiddenAt = 0;
+  setInterval(() => {
+    if (!el || busy) return;
+    const now = Date.now();
+    // Janela oculta ou player fora da tela: não há quadros para contar. Ao voltar, recomeça a contagem.
+    if (document.visibilityState !== 'visible' || !onScreen) {
+      hiddenAt ||= now;
+      return;
+    }
+    if (hiddenAt) {
+      hiddenAt = 0;
+      startedAt = now;
+      if (lastFrameAt) lastFrameAt = now;
+      return;
+    }
+
+    const video = el.video;
+    // Com o callback por quadro, só ele conta: currentTime anda com a imagem parada e
+    // totalVideoFrames atrasa dezenas de segundos no WebKit, o que esconderia o congelamento.
+    if (video && !usesFrameCallback) {
+      const quality = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+      const frames = quality ? quality.totalVideoFrames : -1;
+      const timeMoved = lastTime >= 0 && video.currentTime > lastTime;
+      const framesMoved = lastFrames >= 0 && frames > lastFrames;
+      if (timeMoved || framesMoved) markFrame();
+      lastTime = video.currentTime;
+      lastFrames = frames;
+    }
+
+    if (lastFrameAt) {
+      if (now - lastFrameAt > STALL_MS) {
+        reconnect();
+        return;
+      }
+      if (failures && now - playingSince > HEALTHY_MS) failures = 0;
+      report('playing');
+    } else if (now - startedAt > Math.min(FIRST_FRAME_MS * (failures + 1), MAX_WAIT_MS)) {
+      reconnect();
+    }
+  }, 1000);
+
+  create();
+</script>
+</body>
+</html>

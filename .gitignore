@@ -1,0 +1,38 @@
+# Dependências
+node_modules/
+
+# Build do frontend (Vite)
+dist/
+*.tsbuildinfo
+
+# Build do Rust e arquivos gerados pelo Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Variáveis de ambiente locais
+.env
+.env.*
+!.env.example
+
+# Configurações locais do Claude Code
+.claude/settings.local.json
+
+# Arquivos do sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+CLAUDE.md
