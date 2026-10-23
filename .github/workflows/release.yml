@@ -47,11 +47,15 @@ jobs:
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          # A tag tem que existir antes do rascunho. Sem ela, o GitHub dá à release o nome "untagged-…",
-          # a busca pela tag não acha nada e o tauri-action pula todos os uploads.
-          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA"
-          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "gcam $VERSION" --generate-notes
-          ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)
+          # Cria o rascunho pela API e já pega o ID da resposta. Procurar o rascunho depois pela tag
+          # não funciona (volta vazio), e sem o ID o tauri-action pula todos os uploads.
+          ID=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$TAG" \
+            -f target_commitish="$GITHUB_SHA" \
+            -f name="gcam $VERSION" \
+            -F draft=true \
+            -F generate_release_notes=true \
+            --jq .id)
           test -n "$ID"
           echo "id=$ID" >> "$GITHUB_OUTPUT"
 
